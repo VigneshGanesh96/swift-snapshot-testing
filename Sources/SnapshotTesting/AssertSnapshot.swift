@@ -6,7 +6,15 @@ import XCTest
 public var diffTool: String? = nil
 
 /// Whether or not to record all new references.
-public var record = false
+public var isRecording = false
+
+/// Whether or not to record all new references.
+/// Due to a name clash in Xcode 12, this has been renamed to `isRecording`.
+@available(*, deprecated, renamed: "isRecording")
+public var record: Bool {
+  get { isRecording }
+  set { isRecording = newValue }
+}
 
 /// Asserts that a given value matches a reference on disk.
 ///
@@ -19,6 +27,42 @@ public var record = false
 ///   - file: The file in which failure occurred. Defaults to the file name of the test case in which this function was called.
 ///   - testName: The name of the test in which failure occurred. Defaults to the function name of the test case in which this function was called.
 ///   - line: The line number on which failure occurred. Defaults to the line number on which this function was called.
+///
+
+//MARK: - Main Changes for snapshotDirectory --> to resolve the Testcase error in New Xcode version
+
+public func assertInlineSnapshot<Value>(matching value: @autoclosure () throws -> Value, as snapshotting: SnapshotTesting.Snapshotting<Value, String>, record recording: Bool = false, timeout: TimeInterval = 5, with reference: String, file: StaticString = #file, testName: String = #function, line: UInt = #line) {
+    _assertInlineSnapshot(matching: try value(),
+                          as: snapshotting,
+                          record: recording,
+                          timeout: timeout,
+                          with: reference,
+                          file: file,
+                          testName: testName,
+                          line: line)
+}
+
+func snapshotDirectory(
+    for file: StaticString,
+    ciScriptsPathComponent: String = "ci_scripts",
+    relativePathComponent: String = "Tests"
+) -> String {
+    var sourcePathComponents = URL(fileURLWithPath: "\(file)").pathComponents
+
+    if let indexFolder = sourcePathComponents.firstIndex(of: relativePathComponent) {
+        sourcePathComponents.insert(ciScriptsPathComponent, at: indexFolder)
+    }
+    var pathsComponents: [String] = sourcePathComponents.dropLast()
+
+    let fileUrl = URL(fileURLWithPath: "\(file)", isDirectory: false)
+    let folderName = fileUrl.deletingPathExtension().lastPathComponent
+
+    pathsComponents.append("__Snapshots__")
+    pathsComponents.append(folderName)
+
+    return pathsComponents.joined(separator: "/")
+}
+
 public func assertSnapshot<Value, Format>(
   matching value: @autoclosure () throws -> Value,
   as snapshotting: Snapshotting<Value, Format>,
@@ -30,18 +74,20 @@ public func assertSnapshot<Value, Format>(
   line: UInt = #line
   ) {
 
+  let snapshotDirectoryUrl = snapshotDirectory(for: file) //MARK: - Main Changes --> Create snapshotDirectory
   let failure = verifySnapshot(
     matching: try value(),
     as: snapshotting,
     named: name,
     record: recording,
+    snapshotDirectory: snapshotDirectoryUrl, //MARK: - Main Changes --> Added snapshotDirectory URL to verify
     timeout: timeout,
     file: file,
     testName: testName,
     line: line
   )
   guard let message = failure else { return }
-  XCTFail(message, file: file, line: line)
+  XCTFail("\(message) snap: \(snapshotDirectoryUrl) file: \(file) ", file: file, line: line)
 }
 
 /// Asserts that a given value matches references on disk.
@@ -165,7 +211,7 @@ public func verifySnapshot<Value, Format>(
   )
   -> String? {
 
-    let recording = recording || record
+    let recording = recording || isRecording
 
     do {
       let fileUrl = URL(fileURLWithPath: "\(file)", isDirectory: false)
@@ -224,7 +270,7 @@ public func verifySnapshot<Value, Format>(
       guard var diffable = optionalDiffable else {
         return "Couldn't snapshot value"
       }
-      
+
       guard !recording, fileManager.fileExists(atPath: snapshotFileUrl.path) else {
         try snapshotting.diffing.toData(diffable).write(to: snapshotFileUrl)
         return recording
